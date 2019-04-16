@@ -58,6 +58,6 @@ for i in range(len(test_label_files)):
 with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True))) as sess:
     for i in range(len(test_feature_files)):
         checkpoint_path = os.path.join(config["model_dir"], "model.ckpt-%d"%int(args.eval_step))
-        prediction_file = inference(config_file, checkpoint_path, test_feature_files[i], test_tag_files[i])
+        prediction_file = inference(config_file, checkpoint_path, test_feature_files[i])
         score = external_evaluator[i].score(test_label_files[i], prediction_file)
         print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path, test_label_files[i], score))

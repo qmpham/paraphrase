@@ -148,7 +148,7 @@ class Model:
             if self.using_tf_idf:
                 tf_idf_table = build_tf_idf_table(config["tgt_vocab_path"], config["tgt_vocab_size"], config["domain_numb"], config["training_feature_file"])           
                 self.tf_idf_table = tf_idf_table
-            iterator = load_data(config["training_label_file"], src_vocab, config["training_tag_file"], batch_size = train_batch_size, batch_type=config["training_batch_type"], batch_multiplier = batch_multiplier, tgt_path=config["training_feature_file"], tgt_vocab=tgt_vocab, max_len = max_len, mode=mode, shuffle_buffer_size = config["sample_buffer_size"], num_threads = num_threads, version = load_data_version, distribution = example_sampling_distribution)
+            iterator = load_data(config["training_label_file"], src_vocab, batch_size = train_batch_size, batch_type=config["training_batch_type"], batch_multiplier = batch_multiplier, tgt_path=config["training_feature_file"], tgt_vocab=tgt_vocab, max_len = max_len, mode=mode, shuffle_buffer_size = config["sample_buffer_size"], num_threads = num_threads, version = load_data_version, distribution = example_sampling_distribution)
             inputs = iterator.get_next()
             data_shards = dispatcher.shard(inputs)
 
@@ -159,7 +159,7 @@ class Model:
 
         elif mode == "Inference": 
             assert test_feature_file != None
-            iterator = load_data(test_feature_file, src_vocab, test_tag_file, batch_size = eval_batch_size, batch_type = "examples", batch_multiplier = 1, max_len = max_len, mode = mode, version = load_data_version)
+            iterator = load_data(test_feature_file, src_vocab, batch_size = eval_batch_size, batch_type = "examples", batch_multiplier = 1, max_len = max_len, mode = mode, version = load_data_version)
             inputs = iterator.get_next() 
             with tf.variable_scope(config["Architecture"]):
                 _ , self.predictions, _, _ = self._build(inputs, config, mode)
