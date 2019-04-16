@@ -115,7 +115,7 @@ with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_pla
             for i in range(Eval_dataset_numb):
                 prediction_file = inference(config_file, checkpoint_path, config["eval_feature_file"][i])
                 score = external_evaluator[i].score(config["eval_label_file"][i], prediction_file)
-                print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path, score))
+                print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path,config["eval_label_file"][i], score))
                 score_summary = tf.Summary(value=[tf.Summary.Value(tag="eval_score_%d"%i, simple_value=score)])
                 writer_bleu[i].add_summary(score_summary, global_step_)
                 writer_bleu[i].flush()
