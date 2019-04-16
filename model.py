@@ -249,13 +249,13 @@ class Model:
             else:
                 encoder_output = encoder.encode(emb_src_batch, sequence_length = src_length, mode=tf.estimator.ModeKeys.PREDICT)
             self.encoder_output = encoder_output
-        tgt_length = inputs["tgt_length"]
+        tgt_length = None
         output_layer = None
         if mode == "Training":    
+            tgt_length = inputs["tgt_length"]
             if Loss_type == "Cross_Entropy":
                 with tf.variable_scope("decoder"):                           
-                    if config.get("Standard",True):
-                        logits, _, _, attention = decoder.decode(
+                    logits, _, _, attention = decoder.decode(
                                               emb_tgt_batch, 
                                               tgt_length + 1,
                                               vocab_size = int(config["tgt_vocab_size"]),
@@ -264,22 +264,12 @@ class Model:
                                               mode = tf.estimator.ModeKeys.TRAIN,
                                               memory = encoder_output[0],
                                               memory_sequence_length = encoder_output[2],
-                                              return_alignment_history = True) 
-                    else:
-                        logits, _, _, attention = decoder.decode(
-                                              emb_tgt_batch,
-                                              tgt_length + 1,
-                                              emb_mask = position_mask_tgt,
-                                              vocab_size = int(config["tgt_vocab_size"]),
-                                              initial_state = encoder_output[1],
-                                              output_layer = output_layer,
-                                              mode = tf.estimator.ModeKeys.TRAIN,
-                                              memory = encoder_output[0],
-                                              memory_sequence_length = encoder_output[2],
-                                              return_alignment_history = True)
+                                              return_alignment_history = True)                     
                     outputs = {
                            "logits": logits
                            }           
+        else:
+            outputs = None
 
         if mode != "Training":
                             
@@ -287,14 +277,9 @@ class Model:
                 beam_width = config.get("beam_width", 5)
                 print("Inference with beam width %d"%(beam_width))
                 maximum_iterations = config.get("maximum_iterations", 250)
-                if tgt_masking:
-                    if config.get("position_mask", True):
-                        position_mask_tgt = tf.nn.embedding_lookup(tgt_mask_,tf.fill(tf.shape(inputs["domain"])*beam_width, config["domain_numb"]))
-                        position_mask_tgt = tf.Print(position_mask_tgt,[tf.shape(position_mask_tgt)],message="position_mask_tgt shape", first_n=10, summarize=100)
-                        position_mask_tgt = tf.expand_dims(position_mask_tgt, 1)
-                if beam_width <= 1:
-                    if config.get("Standard",True):
-                        sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode(
+               
+                if beam_width <= 1:                
+                    sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode(
                                                                                     tgt_emb,
                                                                                     start_tokens,
                                                                                     end_token,
@@ -307,21 +292,8 @@ class Model:
                                                                                     memory_sequence_length=encoder_output[2],
                                                                                     dtype=tf.float32,
                                                                                     return_alignment_history=True)
-                    else:
-                        sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode(
-                                                                                    tgt_emb,
-                                                                                    start_tokens,
-                                                                                    end_token,
-                                                                                    emb_mask = position_mask_tgt,
-                                                                                    vocab_size=int(config["tgt_vocab_size"]),
-                                                                                    initial_state=encoder_output[1],
-                                                                                    maximum_iterations=maximum_iterations,
-                                                                                    output_layer = output_layer,
-                                                                                    mode=tf.estimator.ModeKeys.PREDICT,
-                                                                                    memory=encoder_output[0],
-                                                                                    memory_sequence_length=encoder_output[2],
-                                                                                    dtype=tf.float32,
-                                                                                    return_alignment_history=True)
+                else:
+                    
                    
             target_tokens = tgt_vocab_rev.lookup(tf.cast(sampled_ids, tf.int64))
             
