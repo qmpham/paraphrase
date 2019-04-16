@@ -293,6 +293,22 @@ class Model:
                                                                                     dtype=tf.float32,
                                                                                     return_alignment_history=True)
                 else:
+                    length_penalty = config.get("length_penalty", 0)
+                    sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode_and_search(
+                                                          tgt_emb,
+                                                          start_tokens,
+                                                          end_token,
+                                                          vocab_size = int(config["tgt_vocab_size"]),
+                                                          initial_state = encoder_output[1],
+                                                          beam_width = beam_width,
+                                                          length_penalty = length_penalty,
+                                                          maximum_iterations = maximum_iterations,
+                                                          output_layer = output_layer,
+                                                          mode = tf.estimator.ModeKeys.PREDICT,
+                                                          memory = encoder_output[0],
+                                                          memory_sequence_length = encoder_output[2],
+                                                          dtype=tf.float32,
+                                                          return_alignment_history = True)
                     
                    
             target_tokens = tgt_vocab_rev.lookup(tf.cast(sampled_ids, tf.int64))
