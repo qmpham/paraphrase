@@ -19,7 +19,7 @@ def inference(config_file, checkpoint_path=None, test_feature_file=None):
     
     with open(config_file, "r") as stream:
         config = yaml.load(stream)
-    assert test_feature_file!=None and test_tag_file!=None
+    assert test_feature_file!=None 
     from opennmt.utils.misc import print_bytes
     graph = tf.Graph()    
     with tf.Session(graph=graph,config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True))) as sess_:
