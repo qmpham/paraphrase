@@ -56,3 +56,7 @@ def inference(config_file, checkpoint_path=None, test_feature_file=None):
                     break
         
     return os.path.join(config["model_dir"],"eval",os.path.basename(test_feature_file) + ".trans." + os.path.basename(checkpoint_path))
+
+def kl_coeff(i):
+    coeff = (tf.tanh((i - 3500)/1000) + 1)/2
+    return tf.cast(coeff, tf.float32)

@@ -43,7 +43,7 @@ def create_embeddings(vocab_size, depth=512):
 
 class Model:
 
-    def _compute_loss(self, outputs, tgt_ids_batch, tgt_length, params, mode):
+    def _compute_loss(self, outputs, tgt_ids_batch, tgt_length, params, mode, mu_states, logvar_states):
         
         if mode == "Training":
             mode = tf.estimator.ModeKeys.TRAIN            
@@ -59,16 +59,24 @@ class Model:
                 attention = None 
                             
             loss, loss_normalizer, loss_token_normalizer = cross_entropy_sequence_loss(
-                                                                                logits,
-                                                                                tgt_ids_batch, 
-                                                                                tgt_length + 1,
-                                                                                label_smoothing=params.get("label_smoothing", 0.0),
-                                                                                average_in_time=params.get("average_loss_in_time", True),
-                                                                                mode=mode)
-            return loss, loss_normalizer, loss_token_normalizer
+                logits,
+                tgt_ids_batch, 
+                tgt_length + 1,                                                         
+                label_smoothing = params.get("label_smoothing", 0.0),
+                average_in_time = params.get("average_loss_in_time", True),
+                mode = mode
+            )
+            
+            
+            #----- Calculating kl divergence --------
+
+            kld_loss = -0.5 * tf.reduce_sum(logvar_states - tf.pow(mu_states, 2) - tf.exp(logvar_states) + 1, 1)
+
+            return loss, loss_normalizer, loss_token_normalizer, kld_loss
         
     
-    def _initializer(self, params):        
+    def _initializer(self, params):
+        
         if params["Architecture"] == "Transformer":
             print("tf.variance_scaling_initializer")
             return tf.variance_scaling_initializer(
@@ -81,7 +89,7 @@ class Model:
               minval=-param_init, maxval=param_init, dtype=self.dtype)
         return None
         
-    def __init__(self, config_file, mode, test_feature_file=None, test_tag_file=None):
+    def __init__(self, config_file, mode, test_feature_file=None):
 
         def _normalize_loss(num, den=None):
             """Normalizes the loss."""
@@ -112,13 +120,14 @@ class Model:
                     tboard_loss = _normalize_loss(loss[0], den=loss[2]) if len(loss) > 2 else actual_loss
                     tf.summary.scalar("loss", tboard_loss)            
                     losses = actual_loss
+                    loss_kd = _normalize_loss(loss[3])
 
-            return losses                         
+            return losses,loss_kd                         
 
         def _loss_op(inputs, params, mode):
             """Single callable to compute the loss."""
-            logits, _, tgt_ids_out, tgt_length  = self._build(inputs, params, mode)
-            losses = self._compute_loss(logits, tgt_ids_out, tgt_length, params, mode)
+            logits, _, tgt_ids_out, tgt_length, mu_states, logvar_states  = self._build(inputs, params, mode)
+            losses = self._compute_loss(logits, tgt_ids_out, tgt_length, params, mode, mu_states, logvar_states)
             
             return losses
 
@@ -126,29 +135,67 @@ class Model:
             config = yaml.load(stream)
 
         Loss_type = config.get("Loss_Function","Cross_Entropy")
+        
         self.Loss_type = Loss_type
         self.config = config 
         self.using_tf_idf = config.get("using_tf_idf", False)
+        
         train_batch_size = config["training_batch_size"]   
         eval_batch_size = config["eval_batch_size"]
+        
+        self.latent_variable_size = config.get("latent_variable_size",1000)
+        
         max_len = config["max_len"]
+        
         example_sampling_distribution = config.get("example_sampling_distribution",None)
         self.dtype = tf.float32
+        
         # Input pipeline:
+        # Return lookup table of type index_table_from_file
         src_vocab, _ = load_vocab(config["src_vocab_path"], config["src_vocab_size"])
         tgt_vocab, _ = load_vocab(config["tgt_vocab_path"], config["tgt_vocab_size"])
+        
         load_data_version = config.get("dataprocess_version",None)
+        
         if mode == "Training":    
             print("num_devices", config.get("num_devices",1))
-            dispatcher = GraphDispatcher(config.get("num_devices",1), daisy_chain_variables=config.get("daisy_chain_variables",False), devices= config.get("devices",None)) 
+            
+            dispatcher = GraphDispatcher(
+                config.get("num_devices",1), 
+                daisy_chain_variables=config.get("daisy_chain_variables",False), 
+                devices= config.get("devices",None)
+            ) 
+            
             batch_multiplier = config.get("num_devices", 1)
             num_threads = config.get("num_threads", 4)
+            
             if Loss_type == "Wasserstein":
                 self.using_tf_idf = True
+                
             if self.using_tf_idf:
-                tf_idf_table = build_tf_idf_table(config["tgt_vocab_path"], config["tgt_vocab_size"], config["domain_numb"], config["training_feature_file"])           
+                tf_idf_table = build_tf_idf_table(
+                    config["tgt_vocab_path"], 
+                    config["tgt_vocab_size"], 
+                    config["domain_numb"], 
+                    config["training_feature_file"])           
                 self.tf_idf_table = tf_idf_table
-            iterator = load_data(config["training_label_file"], src_vocab, batch_size = train_batch_size, batch_type=config["training_batch_type"], batch_multiplier = batch_multiplier, tgt_path=config["training_feature_file"], tgt_vocab=tgt_vocab, max_len = max_len, mode=mode, shuffle_buffer_size = config["sample_buffer_size"], num_threads = num_threads, version = load_data_version, distribution = example_sampling_distribution)
+                
+            iterator = load_data(
+                config["training_label_file"], 
+                src_vocab, 
+                batch_size = train_batch_size, 
+                batch_type=config["training_batch_type"], 
+                batch_multiplier = batch_multiplier, 
+                tgt_path=config["training_feature_file"], 
+                tgt_vocab=tgt_vocab, 
+                max_len = max_len, 
+                mode=mode, 
+                shuffle_buffer_size = config["sample_buffer_size"], 
+                num_threads = num_threads, 
+                version = load_data_version, 
+                distribution = example_sampling_distribution
+            )
+            
             inputs = iterator.get_next()
             data_shards = dispatcher.shard(inputs)
 
@@ -159,10 +206,22 @@ class Model:
 
         elif mode == "Inference": 
             assert test_feature_file != None
-            iterator = load_data(test_feature_file, src_vocab, batch_size = eval_batch_size, batch_type = "examples", batch_multiplier = 1, max_len = max_len, mode = mode, version = load_data_version)
+            
+            iterator = load_data(
+                test_feature_file, 
+                src_vocab, 
+                batch_size = eval_batch_size, 
+                batch_type = "examples", 
+                batch_multiplier = 1, 
+                max_len = max_len, 
+                mode = mode, 
+                version = load_data_version
+            )
+            
             inputs = iterator.get_next() 
+            
             with tf.variable_scope(config["Architecture"]):
-                _ , self.predictions, _, _ = self._build(inputs, config, mode)
+                _ , self.predictions, _, _, _, _ = self._build(inputs, config, mode)
             
         self.iterator = iterator
         self.inputs = inputs
@@ -193,9 +252,11 @@ class Model:
                 
         tgt_vocab_rev = tf.contrib.lookup.index_to_string_table_from_file(config["tgt_vocab_path"], vocab_size= int(config["tgt_vocab_size"]) - 1, default_value=constants.UNKNOWN_TOKEN)
         end_token = constants.END_OF_SENTENCE_ID
+        
         # Embedding        
         size_src = config.get("src_embedding_size",512)
         size_tgt = config.get("tgt_embedding_size",512)
+        latent_variable_size = self.latent_variable_size
         with tf.variable_scope("src_embedding"):
             src_emb = create_embeddings(config["src_vocab_size"], depth=size_src)
 
@@ -206,26 +267,84 @@ class Model:
         self.src_emb = src_emb
 
         # Build encoder, decoder
+#---------------------------------------------GRU-----------------------------------------#
         if config["Architecture"] == "GRU":
             nlayers = config.get("nlayers",4)
-            encoder = onmt.encoders.BidirectionalRNNEncoder(nlayers, hidden_size, reducer=onmt.layers.ConcatReducer(), cell_class = tf.contrib.rnn.GRUCell, dropout=0.1, residual_connections=True)
-            decoder = onmt.decoders.AttentionalRNNDecoder(nlayers, hidden_size, bridge=onmt.layers.CopyBridge(), cell_class=tf.contrib.rnn.GRUCell, dropout=0.1, residual_connections=True)
+            
+#==============================ENCODER==================================
+            encoder = onmt.encoders.BidirectionalRNNEncoder(
+                nlayers, 
+                hidden_size, 
+                reducer=onmt.layers.ConcatReducer(), 
+                cell_class = tf.contrib.rnn.GRUCell, 
+                dropout=0.1, 
+                residual_connections=True
+            )
+#==============================DECODER==================================
+            decoder = onmt.decoders.AttentionalRNNDecoder(
+                nlayers, 
+                hidden_size, 
+                bridge=onmt.layers.CopyBridge(), 
+                cell_class=tf.contrib.rnn.GRUCell, 
+                dropout=0.1, 
+                residual_connections=True
+            )
+    
+#---------------------------------------------LSTM-----------------------------------------# 
         elif config["Architecture"] == "LSTM":
             nlayers = config.get("nlayers",4)
-            encoder = onmt.encoders.BidirectionalRNNEncoder(nlayers, num_units=hidden_size, reducer=onmt.layers.ConcatReducer(), cell_class=tf.nn.rnn_cell.LSTMCell,
-                                                          dropout=0.1, residual_connections=True)
-            decoder = onmt.decoders.AttentionalRNNDecoder(nlayers, num_units=hidden_size, bridge=onmt.layers.CopyBridge(), attention_mechanism_class=tf.contrib.seq2seq.LuongAttention,
-                                                         cell_class=tf.nn.rnn_cell.LSTMCell, dropout=0.1, residual_connections=True)
+
+#==============================ENCODER==================================
+            encoder = onmt.encoders.BidirectionalRNNEncoder(
+                nlayers, 
+                num_units=hidden_size, 
+                reducer=onmt.layers.ConcatReducer(), 
+                cell_class=tf.nn.rnn_cell.LSTMCell,
+                dropout=0.1, 
+                residual_connections=True
+            )
+#==============================DECODER==================================
+            decoder = onmt.decoders.AttentionalRNNDecoder(
+                nlayers, 
+                num_units=hidden_size, 
+                bridge=onmt.layers.CopyBridge(), 
+                attention_mechanism_class=tf.contrib.seq2seq.LuongAttention,
+                cell_class=tf.nn.rnn_cell.LSTMCell, 
+                dropout=0.1, 
+                residual_connections=True
+            )
+    
+#---------------------------------------------TRANSFORMER-----------------------------------------#
         elif config["Architecture"] == "Transformer":
             nlayers = config.get("nlayers",6)
-            decoder = onmt.decoders.self_attention_decoder.SelfAttentionDecoder(nlayers, num_units=hidden_size, num_heads=8, ffn_inner_dim=2048, dropout=0.1, attention_dropout=0.1, relu_dropout=0.1)
-            encoder = onmt.encoders.self_attention_encoder.SelfAttentionEncoder(nlayers, num_units=hidden_size, num_heads=8, ffn_inner_dim=2048, dropout=0.1, attention_dropout=0.1, relu_dropout=0.1)       
+
+#==============================ENCODER==================================
+            encoder = onmt.encoders.self_attention_encoder.SelfAttentionEncoder(
+                nlayers, 
+                num_units=hidden_size, 
+                num_heads=8, 
+                ffn_inner_dim=2048, 
+                dropout=0.1, 
+                attention_dropout=0.1, 
+                relu_dropout=0.1
+            )  
+#==============================DECODER==================================
+            decoder = onmt.decoders.self_attention_decoder.SelfAttentionDecoder(
+                nlayers, 
+                num_units=hidden_size, 
+                num_heads=8, 
+                ffn_inner_dim=2048, 
+                dropout=0.1, 
+                attention_dropout=0.1, 
+                relu_dropout=0.1
+            )
         print("Model type: ", config["Architecture"])
 
         if mode =="Training":            
             print("Building model in Training mode")
         elif mode == "Inference":
             print("Build model in Inference mode")
+            
         start_tokens = tf.fill([tf.shape(inputs["src_ids"])[0]], constants.START_OF_SENTENCE_ID)
                     
         emb_src_batch = tf.nn.embedding_lookup(src_emb, inputs["src_ids"]) # dim = [batch, length, depth]
@@ -243,36 +362,112 @@ class Model:
         if mode =="Training":
             tgt_ids_batch = inputs["tgt_ids_out"]
             
+        #----------encoder-------------------
         with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
+            
             if mode=="Training":
-                encoder_output = encoder.encode(emb_src_batch, sequence_length = src_length, mode=tf.estimator.ModeKeys.TRAIN)
+                
+                encoder_output = encoder.encode(
+                    emb_src_batch, 
+                    sequence_length = src_length, 
+                    mode=tf.estimator.ModeKeys.TRAIN
+                )
+                
             else:
-                encoder_output = encoder.encode(emb_src_batch, sequence_length = src_length, mode=tf.estimator.ModeKeys.PREDICT)
+                encoder_output = encoder.encode(
+                    emb_src_batch, 
+                    sequence_length = src_length, 
+                    mode=tf.estimator.ModeKeys.PREDICT
+                )
+                
             self.encoder_output = encoder_output
+            
+        encoder_outputs, encoder_states, encoder_seq_length = encoder_output
+            
         tgt_length = None
         output_layer = None
-        if mode == "Training":    
+        
+        if mode == "Training":
+            
             tgt_length = inputs["tgt_length"]
+            
             if Loss_type == "Cross_Entropy":
-                with tf.variable_scope("decoder"):                           
-                    logits, _, _, attention = decoder.decode(
-                                              emb_tgt_batch, 
-                                              tgt_length + 1,
-                                              vocab_size = int(config["tgt_vocab_size"]),
-                                              initial_state = encoder_output[1],
-                                              output_layer = output_layer,                                              
-                                              mode = tf.estimator.ModeKeys.TRAIN,
-                                              memory = encoder_output[0],
-                                              memory_sequence_length = encoder_output[2],
-                                              return_alignment_history = True)                     
-                    outputs = {
-                           "logits": logits
-                           }           
+                
+                if config["Architecture"] == "Transformer":
+                
+                    #----- Generating z -----------
+                    with tf.variable_scope("generator"):
+                        
+                        # encoder_outputs_reduced = tf.math.reduce_max(encoder_outputs,axis=1) # dim [batch, hidden_size]
+                        z_states = []
+                        mu_states = []
+                        logvar_states = []
+                        
+                        count = 0
+                        for state in encoder_states :
+                            # state dim [batch, hidden_size]
+                        
+                        
+                            W_out_to_mu = tf.get_variable('output_to_mu_weight'+str(count), shape = [hidden_size, latent_variable_size])
+                            b_out_to_mu = tf.get_variable('output_to_mu_bias'+str(count), shape = [latent_variable_size])
+
+                            mu = tf.nn.sigmoid(tf.add(tf.matmul(state, W_out_to_mu), b_out_to_mu))
+
+                            W_out_to_logvar = tf.get_variable('output_to_logvar_weight'+str(count), shape = [hidden_size, latent_variable_size])
+                            b_out_to_logvar = tf.get_variable('output_to_logvar_bias'+str(count), shape = [latent_variable_size])
+
+                            logvar = tf.nn.sigmoid(tf.add(tf.matmul(state, W_out_to_logvar), b_out_to_logvar))
+
+                            std = tf.exp(0.5 * logvar)
+
+                            z = tf.random_normal([tf.shape(inputs["src_ids"])[0], latent_variable_size])
+                                # z, mu, logvar dim [batch, latent_size]
+
+                            z = z * std + mu
+                            
+                            z_states.append(z)
+                            mu_states.append(mu)
+                            logvar_states.append(logvar)
+
+                            count += 1
+                            
+                        mu_states = tf.concat(mu_states, 1)
+                        logvar_states = tf.concat(logvar_states, 1)
+                        
+                        #supposed to have shape [batch, nlayer * latent_size]
+                        
+                            
+                    #----------decoder-------------------
+                    with tf.variable_scope("decoder"): 
+
+                        logits, _, _, attention = decoder.decode(
+                                                  emb_tgt_batch, 
+                                                  tgt_length + 1,
+                                                  vocab_size = int(config["tgt_vocab_size"]),
+                                                  initial_state = z_states,
+                                                  output_layer = output_layer,                                              
+                                                  mode = tf.estimator.ModeKeys.TRAIN,
+                                                  memory = encoder_outputs,
+                                                  memory_sequence_length = encoder_seq_length,
+                                                  return_alignment_history = True
+                        )                     
+                        outputs = {
+                               "logits": logits
+                               }           
         else:
             outputs = None
+            mu_states = None
+            logvar_states = None
 
         if mode != "Training":
-                            
+            
+            #-----------Generating z-----------
+            z_states = []
+            
+            for _ in range(nlayers):
+                z = tf.random_normal([tf.shape(inputs["src_ids"])[0], latent_variable_size])
+                z_states.append(z)
+            
             with tf.variable_scope("decoder"):        
                 beam_width = config.get("beam_width", 5)
                 print("Inference with beam width %d"%(beam_width))
@@ -284,7 +479,7 @@ class Model:
                                                                                     start_tokens,
                                                                                     end_token,
                                                                                     vocab_size=int(config["tgt_vocab_size"]),
-                                                                                    initial_state=encoder_output[1],
+                                                                                    initial_state=z_states,
                                                                                     maximum_iterations=maximum_iterations,
                                                                                     output_layer = output_layer,
                                                                                     mode=tf.estimator.ModeKeys.PREDICT,
@@ -299,7 +494,7 @@ class Model:
                                                           start_tokens,
                                                           end_token,
                                                           vocab_size = int(config["tgt_vocab_size"]),
-                                                          initial_state = encoder_output[1],
+                                                          initial_state = z_states,
                                                           beam_width = beam_width,
                                                           length_penalty = length_penalty,
                                                           maximum_iterations = maximum_iterations,
@@ -326,8 +521,7 @@ class Model:
 
         self.outputs = outputs
         
-        return outputs, predictions, tgt_ids_batch, tgt_length               
-        
+        return outputs, predictions, tgt_ids_batch, tgt_length, mu_states, logvar_states         
         
         
         
