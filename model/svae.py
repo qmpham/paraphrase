@@ -41,7 +41,7 @@ def create_embeddings(vocab_size, depth=512):
       """Creates an embedding variable."""
       return tf.get_variable("embedding", shape = [vocab_size, depth])
 
-class Model:
+class SVAE_Model:
 
     def _compute_loss(self, outputs, tgt_ids_batch, tgt_length, params, mode, mu_states, logvar_states):
         
@@ -66,7 +66,6 @@ class Model:
                 average_in_time = params.get("average_loss_in_time", True),
                 mode = mode
             )
-            
             
             #----- Calculating kl divergence --------
 
@@ -143,7 +142,7 @@ class Model:
         train_batch_size = config["training_batch_size"]   
         eval_batch_size = config["eval_batch_size"]
         
-        self.latent_variable_size = config.get("latent_variable_size",1000)
+        self.latent_variable_size = config.get("latent_variable_size",128)
         
         max_len = config["max_len"]
         
@@ -257,6 +256,7 @@ class Model:
         size_src = config.get("src_embedding_size",512)
         size_tgt = config.get("tgt_embedding_size",512)
         latent_variable_size = self.latent_variable_size
+        
         with tf.variable_scope("src_embedding"):
             src_emb = create_embeddings(config["src_vocab_size"], depth=size_src)
 
@@ -331,7 +331,7 @@ class Model:
 #==============================DECODER==================================
             decoder = onmt.decoders.self_attention_decoder.SelfAttentionDecoder(
                 nlayers, 
-                num_units=hidden_size, 
+                num_units=hidden_size + latent_variable_size, 
                 num_heads=8, 
                 ffn_inner_dim=2048, 
                 dropout=0.1, 
@@ -383,7 +383,15 @@ class Model:
             self.encoder_output = encoder_output
             
         encoder_outputs, encoder_states, encoder_seq_length = encoder_output
-            
+        
+        batch_size = tf.shape(encoder_outputs)[0]
+        max_length = tf.shape(encoder_outputs)[1]
+        
+        #with tf.variable_scope("constant", reuse=tf.AUTO_REUSE): 
+        #    tf_constant_1 = tf.Variable(1, name = 'constant1')
+        
+        #print(tf_constant_1)
+
         tgt_length = None
         output_layer = None
         
@@ -398,45 +406,46 @@ class Model:
                     #----- Generating z -----------
                     with tf.variable_scope("generator"):
                         
-                        # encoder_outputs_reduced = tf.math.reduce_max(encoder_outputs,axis=1) # dim [batch, hidden_size]
-                        z_states = []
-                        mu_states = []
-                        logvar_states = []
+                        last_state = encoder_states[-1] # shape [batch_size, hidden_size]
                         
-                        count = 0
-                        for state in encoder_states :
-                            # state dim [batch, hidden_size]
+                        W_out_to_mu = tf.get_variable('output_to_mu_weight', shape = [hidden_size, latent_variable_size])
+                        b_out_to_mu = tf.get_variable('output_to_mu_bias', shape = [latent_variable_size])
+
+                        mu = tf.nn.sigmoid(tf.add(tf.matmul(last_state, W_out_to_mu), b_out_to_mu))
+
+                        W_out_to_logvar = tf.get_variable('output_to_logvar_weight', shape = [hidden_size, latent_variable_size])
+                        b_out_to_logvar = tf.get_variable('output_to_logvar_bias', shape = [latent_variable_size])
+
+                        logvar = tf.nn.sigmoid(tf.add(tf.matmul(last_state, W_out_to_logvar), b_out_to_logvar))
+
+                        std = tf.exp(0.5 * logvar)
+
+                        z = tf.random_normal([batch_size, latent_variable_size])
+                            # z, mu, logvar shape [batch_size, latent_size]
+
+                        z = z * std + mu 
                         
+                        z = tf.reshape(z, [batch_size,1,-1]) 
+                            # shape [batch_size, 1, latent_size]
                         
-                            W_out_to_mu = tf.get_variable('output_to_mu_weight'+str(count), shape = [hidden_size, latent_variable_size])
-                            b_out_to_mu = tf.get_variable('output_to_mu_bias'+str(count), shape = [latent_variable_size])
-
-                            mu = tf.nn.sigmoid(tf.add(tf.matmul(state, W_out_to_mu), b_out_to_mu))
-
-                            W_out_to_logvar = tf.get_variable('output_to_logvar_weight'+str(count), shape = [hidden_size, latent_variable_size])
-                            b_out_to_logvar = tf.get_variable('output_to_logvar_bias'+str(count), shape = [latent_variable_size])
-
-                            logvar = tf.nn.sigmoid(tf.add(tf.matmul(state, W_out_to_logvar), b_out_to_logvar))
-
-                            std = tf.exp(0.5 * logvar)
-
-                            z = tf.random_normal([tf.shape(inputs["src_ids"])[0], latent_variable_size])
-                                # z, mu, logvar dim [batch, latent_size]
-
-                            z = z * std + mu
-                            
-                            z_states.append(z)
-                            mu_states.append(mu)
-                            logvar_states.append(logvar)
-
-                            count += 1
-                            
-                        mu_states = tf.concat(mu_states, 1)
-                        logvar_states = tf.concat(logvar_states, 1)
+                        zz = tf.tile(z,[1, max_length, 1])
+                            # shape [batch_size, max_length, latent_size]
                         
-                        #supposed to have shape [batch, nlayer * latent_size]
+                        new_memory_inputs = tf.concat([encoder_outputs, zz], 2)
                         
-                            
+                        new_memory_inputs = tf.reshape(new_memory_inputs,[batch_size, -1, hidden_size + latent_variable_size])
+                        
+                        print(encoder_outputs)
+                        print(new_memory_inputs)
+                        
+                            # concat each word output with z, shape [batch_size, max_length, hidden_size + latent_size]
+                    
+                    # self.encoder_outputs = encoder_outputs
+                    # self.new_memory_inputs = new_memory_inputs
+                    # self.max_length = max_length
+                    # self.zz = zz
+                    
+                    
                     #----------decoder-------------------
                     with tf.variable_scope("decoder"): 
 
@@ -444,10 +453,10 @@ class Model:
                                                   emb_tgt_batch, 
                                                   tgt_length + 1,
                                                   vocab_size = int(config["tgt_vocab_size"]),
-                                                  initial_state = z_states,
+                                                  initial_state = encoder_states,
                                                   output_layer = output_layer,                                              
                                                   mode = tf.estimator.ModeKeys.TRAIN,
-                                                  memory = encoder_outputs,
+                                                  memory = new_memory_inputs,
                                                   memory_sequence_length = encoder_seq_length,
                                                   return_alignment_history = True
                         )                     
@@ -456,37 +465,50 @@ class Model:
                                }           
         else:
             outputs = None
-            mu_states = None
-            logvar_states = None
+            mu = None
+            logvar = None
 
         if mode != "Training":
             
             #-----------Generating z-----------
-            z_states = []
+            z = tf.random_normal([batch_size, latent_variable_size])
+                #shape [batch_size, latent_size]
+
+            z = tf.reshape(z, (batch_size,1,-1)) 
+                # shape [batch_size, 1, latent_size]
+
+            zz = tf.tile(z,[1, max_length, 1])
+                # shape [batch_size, max_length, latent_size]
+
+            new_memory_inputs = tf.concat([encoder_outputs, zz], 2)
             
-            for _ in range(nlayers):
-                z = tf.random_normal([tf.shape(inputs["src_ids"])[0], latent_variable_size])
-                z_states.append(z)
+            new_memory_inputs = tf.reshape(new_memory_inputs,[batch_size, -1, hidden_size + latent_variable_size])
+            
+            # self.encoder_outputs = encoder_outputs
+            # self.new_memory_inputs = new_memory_inputs
+            # self.max_length = max_length
+            # self.zz = zz
             
             with tf.variable_scope("decoder"):        
                 beam_width = config.get("beam_width", 5)
                 print("Inference with beam width %d"%(beam_width))
-                maximum_iterations = config.get("maximum_iterations", 250)
+                maximum_iterations = config.get("maximum_iterations", tf.round(2 * max_length))
                
                 if beam_width <= 1:                
                     sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode(
-                                                                                    tgt_emb,
-                                                                                    start_tokens,
-                                                                                    end_token,
-                                                                                    vocab_size=int(config["tgt_vocab_size"]),
-                                                                                    initial_state=z_states,
-                                                                                    maximum_iterations=maximum_iterations,
-                                                                                    output_layer = output_layer,
-                                                                                    mode=tf.estimator.ModeKeys.PREDICT,
-                                                                                    memory=encoder_output[0],
-                                                                                    memory_sequence_length=encoder_output[2],
-                                                                                    dtype=tf.float32,
-                                                                                    return_alignment_history=True)
+                                                                    tgt_emb,
+                                                                    start_tokens,
+                                                                    end_token,
+                                                                    vocab_size=int(config["tgt_vocab_size"]),
+                                                                    initial_state=encoder_states,
+                                                                    maximum_iterations=maximum_iterations,
+                                                                    output_layer = output_layer,
+                                                                    mode=tf.estimator.ModeKeys.PREDICT,
+                                                                    memory=new_memory_inputs,
+                                                                    memory_sequence_length=encoder_output[2],
+                                                                    dtype=tf.float32,
+                                                                    return_alignment_history=True
+                                                                    )
                 else:
                     length_penalty = config.get("length_penalty", 0)
                     sampled_ids, _, sampled_length, log_probs, alignment = decoder.dynamic_decode_and_search(
@@ -494,13 +516,13 @@ class Model:
                                                           start_tokens,
                                                           end_token,
                                                           vocab_size = int(config["tgt_vocab_size"]),
-                                                          initial_state = z_states,
+                                                          initial_state = encoder_states,
                                                           beam_width = beam_width,
                                                           length_penalty = length_penalty,
                                                           maximum_iterations = maximum_iterations,
                                                           output_layer = output_layer,
                                                           mode = tf.estimator.ModeKeys.PREDICT,
-                                                          memory = encoder_output[0],
+                                                          memory = new_memory_inputs,
                                                           memory_sequence_length = encoder_output[2],
                                                           dtype=tf.float32,
                                                           return_alignment_history = True)
@@ -521,8 +543,4 @@ class Model:
 
         self.outputs = outputs
         
-        return outputs, predictions, tgt_ids_batch, tgt_length, mu_states, logvar_states         
-        
-        
-        
-    
+        return outputs, predictions, tgt_ids_batch, tgt_length, mu, logvar         

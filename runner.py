@@ -9,13 +9,14 @@ import numpy as np
 from opennmt.inputters.text_inputter import load_pretrained_embeddings
 from opennmt.utils.losses import cross_entropy_sequence_loss
 from opennmt.utils.evaluator import *
-from model import *
+from model.svae import SVAE_Model
 import os
 import ipdb
 import yaml
 import io
 from tensorflow.python.framework import ops
 import datetime
+import time
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--config_file", required=True , help="configuration file")
@@ -28,7 +29,7 @@ with open(config_file, "r") as stream:
 if not os.path.exists(os.path.join(config["model_dir"],"eval")):
     os.makedirs(os.path.join(config["model_dir"],"eval"))
 
-training_model = Model(config_file, "Training")
+training_model = SVAE_Model(config_file, "Training")
 global_step = tf.train.create_global_step()
 
 if config.get("Loss_Function","Cross_Entropy")=="Cross_Entropy":
@@ -89,35 +90,54 @@ with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_pla
         
     tf.tables_initializer().run()    
     sess.run(training_model.iterator_initializers())
-    total_loss = []            
-   
+
+    total_loss = []
+
+    run_time = 0.
+
+    print("Start training ...")
+
     while global_step_ <= config["iteration_number"]:                       
 
-        loss_, global_step_, _ = sess.run([generator_total_loss, global_step, train_op])               
-        total_loss.append(loss_)
+        #=================== 1 iteration=======================
+        start_time = time.time()
         
+        ce_loss_, kl_loss_, kl_coeff_ ,loss_, global_step_, _ = sess.run([loss, kl_loss, kl_weight, generator_total_loss, global_step, train_op])     
+        
+        run_time += time.time() - start_time
+        
+        total_loss.append(loss_)
+
+        #==================printing things======================
         if (np.mod(global_step_, config["printing_freq"])) == 0:            
-            print((datetime.datetime.now()))
-            print(("Loss at step %d"%(global_step_), np.mean(total_loss)))                
-            
+            print((datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            print("*************Step: {:d} - RTime: {:f}***************".format(global_step_,run_time))
+            print("CE Loss: {:4f} - KL Loss: {:4f} - KL coeff: {:4f}".format(ce_loss_, kl_loss_, kl_coeff_))
+            print("TotalLoss at step {:d}: {:4f}".format(global_step_, np.mean(total_loss)))
+            run_time = 0.             
+
         if (np.mod(global_step_, config["summary_freq"])) == 0:
             training_summary_ = sess.run(training_summary)
             writer.add_summary(training_summary_, global_step=global_step_)
             writer.flush()
             total_loss = []
-            
+
         if (np.mod(global_step_, config["save_freq"])) == 0 and global_step_ > 0:    
-            print((datetime.datetime.now()))
+            print((datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             checkpoint_path = os.path.join(config["model_dir"], 'model.ckpt')
             print(("save to %s"%(checkpoint_path)))
             saver.save(sess, checkpoint_path, global_step = global_step_)
-                                                                                                                 
+
         if (np.mod(global_step_, config["eval_freq"])) == 0 and global_step_ >0: 
-            checkpoint_path = tf.train.latest_checkpoint(config["model_dir"])
-            for i in range(Eval_dataset_numb):
-                prediction_file = inference(config_file, checkpoint_path, config["eval_feature_file"][i])
-                score = external_evaluator[i].score(config["eval_label_file"][i], prediction_file)
-                print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path,config["eval_label_file"][i], score))
-                score_summary = tf.Summary(value=[tf.Summary.Value(tag="eval_score_%d"%i, simple_value=score)])
-                writer_bleu[i].add_summary(score_summary, global_step_)
-                writer_bleu[i].flush()
+            try :
+                checkpoint_path = tf.train.latest_checkpoint(config["model_dir"])
+                for i in range(Eval_dataset_numb):
+                    prediction_file, prediction_dict = inference(config_file, checkpoint_path, config["eval_feature_file"][i])
+                    score = external_evaluator[i].score(config["eval_label_file"][i], prediction_file)
+                    print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path,config["eval_label_file"][i], score))
+                    score_summary = tf.Summary(value=[tf.Summary.Value(tag="eval_score_%d"%i, simple_value=score)])
+                    writer_bleu[i].add_summary(score_summary, global_step_)
+                    writer_bleu[i].flush()
+            except TypeError:
+                print("There is a TypeError, the output maybe empty !")
+                pass

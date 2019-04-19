@@ -1,4 +1,4 @@
-model_dir: models/try
+model_dir: models/svae
 
 training_label_file: /home/tnguyen/datasets/Quora/Quora-50k/text_1_train.txt
        
@@ -117,3 +117,5 @@ summary_freq: 200
 max_to_keep : 30
 
 sample_buffer_size : 22000000
+
+latent_variable_size : 128

@@ -12,4 +12,4 @@ source ~/anaconda3/bin/activate py3.6
 
 which python
 python -c 'import tensorflow; print("tensorflow OK"); import opennmt; print("opennmt OK")'
-python -u runner.py --config_file configs/config_tuanh.yml
+python -u runner.py --config_file configs/config_tuanh.yml 1> log.out 2> log.err &

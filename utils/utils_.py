@@ -7,7 +7,7 @@ import numpy as np
 from opennmt.inputters.text_inputter import load_pretrained_embeddings
 from opennmt.utils.losses import cross_entropy_sequence_loss
 from opennmt.utils.evaluator import *
-import model 
+from model.svae import SVAE_Model
 import os
 import ipdb
 import yaml
@@ -24,7 +24,7 @@ def inference(config_file, checkpoint_path=None, test_feature_file=None):
     graph = tf.Graph()    
     with tf.Session(graph=graph,config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True, gpu_options=tf.GPUOptions(allow_growth=True))) as sess_:
      
-        eval_model = model.Model(config_file, "Inference", test_feature_file)
+        eval_model = SVAE_Model(config_file, "Inference", test_feature_file)
         #emb_src_batch = eval_model.emb_src_batch_()
         saver = tf.train.Saver()
         tf.tables_initializer().run()
@@ -58,5 +58,5 @@ def inference(config_file, checkpoint_path=None, test_feature_file=None):
     return os.path.join(config["model_dir"],"eval",os.path.basename(test_feature_file) + ".trans." + os.path.basename(checkpoint_path))
 
 def kl_coeff(i):
-    coeff = (tf.tanh((i - 3500)/1000) + 1)/2
+    coeff = (tf.tanh((i - 20000)/5000) + 1)/2
     return tf.cast(coeff, tf.float32)
