@@ -10,6 +10,7 @@ from opennmt.inputters.text_inputter import load_pretrained_embeddings
 from opennmt.utils.losses import cross_entropy_sequence_loss
 from opennmt.utils.evaluator import *
 from model.svae import SVAE_Model
+from model.vaeseq import VAESEQ_Model
 import os
 import ipdb
 import yaml
@@ -29,7 +30,7 @@ with open(config_file, "r") as stream:
 if not os.path.exists(os.path.join(config["model_dir"],"eval")):
     os.makedirs(os.path.join(config["model_dir"],"eval"))
 
-training_model = SVAE_Model(config_file, "Training")
+training_model = VAESEQ_Model(config_file, "Training")
 global_step = tf.train.create_global_step()
 
 if config.get("Loss_Function","Cross_Entropy")=="Cross_Entropy":
@@ -132,7 +133,7 @@ with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_pla
             try :
                 checkpoint_path = tf.train.latest_checkpoint(config["model_dir"])
                 for i in range(Eval_dataset_numb):
-                    prediction_file, prediction_dict = inference(config_file, checkpoint_path, config["eval_feature_file"][i])
+                    prediction_file = inference(config_file, checkpoint_path, config["eval_feature_file"][i])
                     score = external_evaluator[i].score(config["eval_label_file"][i], prediction_file)
                     print("BLEU at checkpoint %s for testset %s: %f"%(checkpoint_path,config["eval_label_file"][i], score))
                     score_summary = tf.Summary(value=[tf.Summary.Value(tag="eval_score_%d"%i, simple_value=score)])
