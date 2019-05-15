@@ -9,7 +9,7 @@ import numpy as np
 from opennmt.inputters.text_inputter import load_pretrained_embeddings
 from opennmt.utils.losses import cross_entropy_sequence_loss
 from opennmt.utils.evaluator import *
-from model.svae import SVAE_Model
+from model.SVAE import SVAE_Model
 from model.vaeseq import VAESEQ_Model
 import os
 import ipdb
