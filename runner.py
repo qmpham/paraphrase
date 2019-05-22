@@ -11,6 +11,7 @@ from opennmt.utils.losses import cross_entropy_sequence_loss
 from opennmt.utils.evaluator import *
 from model.SVAE import SVAE_Model
 from model.vaeseq import VAESEQ_Model
+from model.SVAE_z_Sequential import SVAE_zS
 import os
 import ipdb
 import yaml
@@ -35,7 +36,15 @@ global_step = tf.train.create_global_step()
 
 if config.get("Loss_Function","Cross_Entropy")=="Cross_Entropy":
     loss, kl_loss = training_model.loss_()
-    kl_weight = kl_coeff(global_step)
+    use_kl_weight = config.get("use_kl_weight", True)
+    # use_kl_weight = False
+    
+    if use_kl_weight : 
+        kl_weight = tf.cond(loss > 2., lambda: tf.minimum(kl_coeff(global_step),0.0002), lambda: tf.minimum(kl_coeff(global_step), 1))
+    else:
+        kl_weight = tf.constant(1)
+
+    tf.summary.scalar("kl_weight", kl_weight)
     generator_total_loss = loss + kl_loss * kl_weight
 
 inputs = training_model.inputs_()
@@ -103,7 +112,7 @@ with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_pla
         #=================== 1 iteration=======================
         start_time = time.time()
         
-        ce_loss_, kl_loss_, kl_coeff_ ,loss_, global_step_, _ = sess.run([loss, kl_loss, kl_weight, generator_total_loss, global_step, train_op])     
+        ce_loss_, kl_loss_,loss_, global_step_, _, kl_weight_ = sess.run([loss, kl_loss, generator_total_loss, global_step, train_op, kl_weight])     
         
         run_time += time.time() - start_time
         
@@ -113,7 +122,7 @@ with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_pla
         if (np.mod(global_step_, config["printing_freq"])) == 0:            
             print((datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             print("*************Step: {:d} - RTime: {:f}***************".format(global_step_,run_time))
-            print("CE Loss: {:4f} - KL Loss: {:4f} - KL coeff: {:4f}".format(ce_loss_, kl_loss_, kl_coeff_))
+            print("CE Loss: {:4f} - KL Loss: {:4f} - KL coeff: {:4f}".format(ce_loss_, kl_loss_, kl_weight_))
             print("TotalLoss at step {:d}: {:4f}".format(global_step_, np.mean(total_loss)))
             run_time = 0.             
 
