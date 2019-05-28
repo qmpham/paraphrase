@@ -126,10 +126,14 @@ class SVAE:
 
         def _loss_op(inputs, params, mode):
             """Single callable to compute the loss."""
-            logits, _, tgt_ids_out, tgt_length, mu_states, logvar_states  = self._build(inputs, params, mode)
-            losses = self._compute_loss(logits, tgt_ids_out, tgt_length, params, mode, mu_states, logvar_states)
+            if mode=="Training":
+                logits, _, tgt_ids_out, tgt_length, mu_states, logvar_states  = self._build(inputs, params, mode)
+                losses = self._compute_loss(logits, tgt_ids_out, tgt_length, params, mode, mu_states, logvar_states)
+                return losses
+            elif mode=="Inference":
+                _, predictions, _, _, _, _ = self._build(inputs, config, mode)
+                return predictions
             
-            return losses
 
         with open(config_file, "r") as stream:
             config = yaml.load(stream)
@@ -212,7 +216,9 @@ class SVAE:
 
         elif mode == "Inference": 
             assert test_feature_file != None
-            
+            dispatcher = GraphDispatcher(config.get("num_devices",1), daisy_chain_variables=config.get("daisy_chain_variables",False), devices= config.get("devices",None))
+            batch_multiplier = config.get("num_devices", 1)
+            num_threads = config.get("num_threads", 4)
             iterator = load_data(
                 test_feature_file, 
                 src_vocab, 
@@ -223,11 +229,12 @@ class SVAE:
                 mode = mode, 
                 version = load_data_version
             )
-            
             inputs = iterator.get_next() 
-            
+            data_shards = dispatcher.shard(inputs)
+            #with tf.variable_scope(config["Architecture"]):
+            #    _ , self.predictions, _, _, _, _ = self._build(inputs, config, mode)
             with tf.variable_scope(config["Architecture"]):
-                _ , self.predictions, _, _, _, _ = self._build(inputs, config, mode)
+                prediction_shards = dispatcher(_loss_op, data_shards, config, mode)
             
         self.iterator = iterator
         self.inputs = inputs
