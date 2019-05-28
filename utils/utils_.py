@@ -46,16 +46,17 @@ def inference(config_file, checkpoint_path=None, test_feature_file=None):
         sess_.run(eval_model.iterator_initializers())
         print("write to :%s"%os.path.join(config["model_dir"],"eval",os.path.basename(test_feature_file) + ".trans." + os.path.basename(checkpoint_path)))
         with open(os.path.join(config["model_dir"],"eval",os.path.basename(test_feature_file) + ".trans." + os.path.basename(checkpoint_path)),"w") as output_:
-            while True:                 
-                try:                
-                    _tokens, _length = sess_.run([tokens, length])                    
-                    #print emb_src_batch_
-                    for b in range(_tokens.shape[0]):                        
-                        pred_toks = _tokens[b][0][:_length[b][0] - 1]                                                
-                        pred_sent = b" ".join(pred_toks)                        
-                        print_bytes(pred_sent, output_)                                            
-                except tf.errors.OutOfRangeError:
-                    break
+            while True:             
+                device_num = len(tokens_)
+                for i in len(device_num):
+                    try:
+                        _tokens, _length = sess_.run([tokens_[i], length_[i]])     
+                        for b in range(_tokens.shape[0]):                        
+                            pred_toks = _tokens[b][0][:_length[b][0] - 1]                                                
+                            pred_sent = b" ".join(pred_toks)                        
+                            print_bytes(pred_sent, output_)                                            
+                    except tf.errors.OutOfRangeError:
+                        break
         
     return os.path.join(config["model_dir"],"eval",os.path.basename(test_feature_file) + ".trans." + os.path.basename(checkpoint_path))
 
