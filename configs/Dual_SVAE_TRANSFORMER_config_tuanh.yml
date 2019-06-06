@@ -5,12 +5,12 @@ Architecture: Transformer
 #false if LSTM
 daisy_chain_variables: True
 
-training_label_file: /export/home/tnguyen/datasets/IWSLT15-en-vi/train/BPE/iwslt_clean.train.BPE.vi
-training_feature_file: /export/home/tnguyen/datasets/IWSLT15-en-vi/train/BPE/iwslt_clean.train.BPE.en
-eval_feature_file: /export/home/tnguyen/datasets/IWSLT15-en-vi/test/BPE/small.tst2012.BPE.vi
-eval_label_file: /export/home/tnguyen/datasets/IWSLT15-en-vi/test/BPE/small.tst2012.BPE.en
-src_vocab_path: /export/home/tnguyen/datasets/IWSLT15-en-vi/vocab/BPE/vocab.BPE.vi
-tgt_vocab_path: /export/home/tnguyen/datasets/IWSLT15-en-vi/vocab/BPE/vocab.BPE.en
+training_label_file: /export/home/tnguyen/datasets/WMT19-tritexts/train/BPE/wmt_clean.en-fr-de.BPE.fr
+training_feature_file: /export/home/tnguyen/datasets/WMT19-tritexts/train/BPE/wmt_clean.en-fr-de.BPE.de
+eval_feature_file: /export/home/tnguyen/datasets/WMT19-tritexts/eval/BPE/euelections_dev2019.de-fr.BPE.fr
+eval_label_file: /export/home/tnguyen/datasets/WMT19-tritexts/eval/BPE/euelections_dev2019.de-fr.BPE.de
+src_vocab_path: /export/home/tnguyen/datasets/WMT19-tritexts/vocab/base/vocab.BPE.fr
+tgt_vocab_path: /export/home/tnguyen/datasets/WMT19-tritexts/vocab/base/vocab.BPE.de
 
 optimizer_parameters:
         optimizer: LazyAdamOptimizer #GradientDescentOptimizer
@@ -97,9 +97,9 @@ tgt_embedding_size: 512
 
 hidden_size: 600
 
-printing_freq: 100
-save_freq: 100
-eval_freq: 100
+printing_freq: 200
+save_freq: 2000
+eval_freq: 2000
 summary_freq: 200
 
 max_to_keep : 2
@@ -108,7 +108,7 @@ sample_buffer_size : 22000000
 
 latent_variable_size : 1000
 
-latent_variable_size_for_output : 100
+latent_variable_size_for_output : 300
 
 use_kl_annealing : True
 
