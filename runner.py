@@ -43,7 +43,7 @@ if config.get("Loss_Function","Cross_Entropy")=="Cross_Entropy":
     
     use_kl_annealing = config.get("use_kl_annealing", True)
     if use_kl_annealing : 
-        kl_weight = tf.cond(tf.reduce_min(CElosses) > 2.5, lambda: tf.minimum(kl_coeff(global_step),0.001), lambda: tf.minimum(kl_coeff(global_step), 1.))
+        kl_weight = tf.cond(tf.reduce_max(CElosses) > 2.5, lambda: tf.minimum(kl_coeff(global_step),0.001), lambda: tf.minimum(kl_coeff(global_step), 1.))
     else:
         kl_weight = tf.constant(1.)
 
